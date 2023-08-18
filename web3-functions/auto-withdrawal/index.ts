@@ -4,20 +4,32 @@ import {
   Web3FunctionContext,
 } from "@gelatonetwork/web3-functions-sdk";
 import { Contract } from "@ethersproject/contracts";
+import { initDb } from "../utils/db.js";
+import { BigNumber } from "ethers";
 
 const MAX_RANGE = 100; // limit range of events to comply with rpc providers
-const MAX_REQUESTS = 100; // limit number of requests on every execution to avoid hitting timeout
-const ORACLE_ABI = ["event WithdrawalFunded(address indexed _depositor, address indexed _withdrawer, uint256 _amount)"];
+const MAX_REQUESTS = 1; // limit number of requests on every execution to avoid hitting timeout
+const AUTO_WITHDRAWER_ABI = [
+  "event WithdrawalFunded(address indexed _depositor, address indexed _withdrawer, uint256 _amount)",
+];
+
+interface record {
+  withdrawer: string;
+  amount: BigNumber;
+}
 
 Web3Function.onRun(async (context: Web3FunctionContext) => {
-  const { userArgs, storage, multiChainProvider } = context;
+  const { userArgs, secrets, storage, multiChainProvider } = context;
+
+  // User Secrets
+  const PRIVATE_KEY = (await secrets.get("PRIVATE_KEY_POLYBASE")) as string;
+  const PUBLIC_KEY = (await secrets.get("PUBLIC_KEY_POLYBASE")) as string;
 
   const provider = multiChainProvider.default();
 
   // Create oracle & counter contract
-  const oracleAddress =
-    (userArgs.oracle as string) ?? "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
-  const oracle = new Contract(oracleAddress, ORACLE_ABI, provider);
+  const autoWithdrawer = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
+  const oracle = new Contract(autoWithdrawer, AUTO_WITHDRAWER_ABI, provider);
   const topics = [oracle.interface.getEventTopic("WithdrawalFunded")];
   const currentBlock = await provider.getBlockNumber();
 
@@ -55,30 +67,39 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
       };
     }
   }
+  // Update storage for next run
+  await storage.set("lastBlockNumber", lastBlock.toString());
+
+  if (logs.length == 0) {
+    return {
+      canExec: false,
+      message: "No new withdrawal fundings",
+    };
+  }
+
+  const db = await initDb(PRIVATE_KEY, PUBLIC_KEY);
+  const coll = db.collection("WithdrawalFunders");
+
+  async function updateWithdrawerAmount(withdrawer: string, amount: string) {
+    const record = await coll.record(withdrawer).get();
+    // there's a race condition here between when the current amount is fetched and when it's updated
+    if (record.exists()) {
+      const newAmount = BigNumber.from(record.data.amount).add(amount);
+      await record.call("updateAmount", [newAmount.toString()]);
+    } else {
+      await coll.create([withdrawer, amount]);
+    }
+  }
 
   // Parse retrieved events
   console.log(`Matched ${logs.length} new events`);
-  const nbNewEvents = logs.length;
-  totalEvents += logs.length;
   for (const log of logs) {
     const event = oracle.interface.parseLog(log);
     const [depositor, withdrawer, amount] = event.args;
     console.log(
       `Withdrawal funded: ${depositor}$ deposited ${amount} for ${withdrawer}`
     );
-    const currentValue = (await storage.get(withdrawer)) ?? "0";
-    await storage.set(withdrawer, currentValue + amount);
-  }
-
-  // Update storage for next run
-  await storage.set("lastBlockNumber", lastBlock.toString());
-  await storage.set("totalEvents", totalEvents.toString());
-
-  if (nbNewEvents === 0) {
-    return {
-      canExec: false,
-      message: `Total events matched: ${totalEvents} (at block #${lastBlock.toString()})`,
-    };
+    updateWithdrawerAmount(withdrawer, amount);
   }
 
   return {

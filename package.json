@@ -63,6 +63,8 @@
   "dependencies": {
     "@gelatonetwork/automate-sdk": "^2.14.0-beta",
     "@gelatonetwork/web3-functions-sdk": "^2.1.2",
+    "@polybase/client": "0.6.2",
+    "@eth-optimism/core-utils": "0.12.3",
     "ky": "^0.33.2"
   }
 }
