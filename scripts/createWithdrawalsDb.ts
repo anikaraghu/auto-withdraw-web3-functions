@@ -26,16 +26,32 @@ async function createWithdrawalsDb() {
   @public
   collection Withdrawals {
     id: string;
-    amount: string;
-    state: string;
-    constructor (withdrawer: string, txHash: string, state: string) {
-      this.id = withdrawer;
-      this.txHash = txHash;
-      this.state = state;
-    }
+    sender: string;
+    nonce: string;
+    target: string;
+    value: string;
+    gasLimit: string;
+    data: string;
+    createdAt: number;
 
-    updateState(state: string) {
-      this.state = state;
+    constructor (
+      withdrawalHash: string,
+      withdrawer: string,
+      nonce: string,
+      target: string,
+      value: string,
+      gasLimit: string,
+      data: string,
+      createdAt: number
+    ) {
+      this.id = withdrawalHash;
+      this.sender = withdrawer;
+      this.nonce = nonce;
+      this.target = target;
+      this.value = value;
+      this.gasLimit = gasLimit;
+      this.data = data;
+      this.createdAt = createdAt;
     }
 
     del () {
