@@ -13,13 +13,8 @@ const AUTO_WITHDRAWER_ABI = [
   "event WithdrawalFunded(address indexed _depositor, address indexed _withdrawer, uint256 _amount)",
 ];
 
-interface record {
-  withdrawer: string;
-  amount: BigNumber;
-}
-
 Web3Function.onRun(async (context: Web3FunctionContext) => {
-  const { userArgs, secrets, storage, multiChainProvider } = context;
+  const { secrets, storage, multiChainProvider } = context;
 
   // User Secrets
   const PRIVATE_KEY = (await secrets.get("PRIVATE_KEY_POLYBASE")) as string;
@@ -27,19 +22,16 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
 
   const provider = multiChainProvider.default();
 
-  // Create oracle & counter contract
-  const autoWithdrawer = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
-  const oracle = new Contract(autoWithdrawer, AUTO_WITHDRAWER_ABI, provider);
-  const topics = [oracle.interface.getEventTopic("WithdrawalFunded")];
+  const autoWithdrawerAddress = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
+  const autoWithdrawer = new Contract(autoWithdrawerAddress, AUTO_WITHDRAWER_ABI, provider);
+  const topics = [autoWithdrawer.interface.getEventTopic("WithdrawalFunded")];
   const currentBlock = await provider.getBlockNumber();
 
   // Retrieve last processed block number & nb events matched from storage
   const lastBlockStr = await storage.get("lastBlockNumber");
   let lastBlock = lastBlockStr ? parseInt(lastBlockStr) : currentBlock - 2000;
-  let totalEvents = parseInt((await storage.get("totalEvents")) ?? "0");
   console.log(`Last processed block: ${lastBlock}`); 
   console.log(`Current block: ${currentBlock}`);
-  console.log(`Total events matched: ${totalEvents}`);
 
   // Fetch recent logs in range of 100 blocks
   const logs: Log[] = [];
@@ -52,7 +44,7 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
     console.log(`Fetching log events from blocks ${fromBlock} to ${toBlock}`);
     try {
       const eventFilter = {
-        address: oracleAddress,
+        address: autoWithdrawerAddress,
         topics,
         fromBlock,
         toBlock,
@@ -73,7 +65,7 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
   if (logs.length == 0) {
     return {
       canExec: false,
-      message: "No new withdrawal fundings",
+      message: `No new withdrawal fundings. Updated block number: ${lastBlock.toString()}`,
     };
   }
 
@@ -94,7 +86,7 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
   // Parse retrieved events
   console.log(`Matched ${logs.length} new events`);
   for (const log of logs) {
-    const event = oracle.interface.parseLog(log);
+    const event = autoWithdrawer.interface.parseLog(log);
     const [depositor, withdrawer, amount] = event.args;
     console.log(
       `Withdrawal funded: ${depositor}$ deposited ${amount} for ${withdrawer}`
