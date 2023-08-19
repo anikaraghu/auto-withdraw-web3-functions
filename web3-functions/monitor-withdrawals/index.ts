@@ -3,28 +3,25 @@ import {
   Web3Function,
   Web3FunctionContext,
 } from "@gelatonetwork/web3-functions-sdk";
-import { Contract } from "@ethersproject/contracts";
 import { initDb } from "../utils/db.js";
-import { BigNumber } from "ethers";
+import { Contract } from "@ethersproject/contracts";
 
 const MAX_RANGE = 100; // limit range of events to comply with rpc providers
-const MAX_REQUESTS = 1; // limit number of requests on every execution to avoid hitting timeout
-const AUTO_WITHDRAWER_ABI = [
-  "event WithdrawalFunded(address indexed _depositor, address indexed _withdrawer, uint256 _amount)",
-];
+const MAX_REQUESTS = 100; // limit number of requests on every execution to avoid hitting timeout
+const WITHDRAWAL_ABI = ["event ETHBridgeInitiated(address indexed from, address indexed to, uint256 amount, bytes extraData);"];
 
 Web3Function.onRun(async (context: Web3FunctionContext) => {
   const { secrets, storage, multiChainProvider } = context;
+
+  const provider = multiChainProvider.default();
 
   // User Secrets
   const PRIVATE_KEY = (await secrets.get("PRIVATE_KEY_POLYBASE")) as string;
   const PUBLIC_KEY = (await secrets.get("PUBLIC_KEY_POLYBASE")) as string;
 
-  const provider = multiChainProvider.default();
-
-  const autoWithdrawerAddress = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
-  const autoWithdrawer = new Contract(autoWithdrawerAddress, AUTO_WITHDRAWER_ABI, provider);
-  const topics = [autoWithdrawer.interface.getEventTopic("WithdrawalFunded")];
+  const bridgeAddress = "0x4200000000000000000000000000000000000010";
+  const l2StandardBridge = new Contract(bridgeAddress, WITHDRAWAL_ABI, provider);
+  const topics = [l2StandardBridge.interface.getEventTopic("ETHBridgeInitiated")];
   const currentBlock = await provider.getBlockNumber();
 
   // Retrieve last processed block number & nb events matched from storage
@@ -44,7 +41,7 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
     console.log(`Fetching log events from blocks ${fromBlock} to ${toBlock}`);
     try {
       const eventFilter = {
-        address: autoWithdrawerAddress,
+        address: bridgeAddress,
         topics,
         fromBlock,
         toBlock,
@@ -59,39 +56,40 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
       };
     }
   }
+
   // Update storage for next run
   await storage.set("lastBlockNumber", lastBlock.toString());
 
   if (logs.length == 0) {
     return {
       canExec: false,
-      message: `No new withdrawal fundings. Updated block number: ${lastBlock.toString()}`,
+      message: `No new withdrawals. Updated block number: ${lastBlock.toString()}`
     };
   }
 
   const db = await initDb(PRIVATE_KEY, PUBLIC_KEY);
-  const coll = db.collection("WithdrawalFunders");
+  const collFunders = db.collection("WithdrawalFunders");
+  const collWithdrawals = db.collection("Withdrawal");
 
-  async function updateWithdrawerAmount(withdrawer: string, amount: string) {
-    const record = await coll.record(withdrawer).get();
-    // there's a race condition here between when the current amount is fetched and when it's updated
-    if (record.exists()) {
-      const newAmount = BigNumber.from(record.data.amount).add(amount);
-      await record.call("updateAmount", [newAmount.toString()]);
-    } else {
-      await coll.create([withdrawer, amount]);
+  async function updateWithdrawals(withdrawer: string, txHash: string) {
+    const withdrawerFunded = await collFunders.record(withdrawer).get();
+    // Only pay attention to this withdrawal if it's been prefunded
+    if (withdrawerFunded.exists()) {
+      await collWithdrawals.create([withdrawer, txHash, "initated"]);
     }
   }
 
   // Parse retrieved events
   console.log(`Matched ${logs.length} new events`);
   for (const log of logs) {
-    const event = autoWithdrawer.interface.parseLog(log);
-    const [depositor, withdrawer, amount] = event.args;
+    const event = l2StandardBridge.interface.parseLog(log);
+    const [from, to, amount, extraData] = event.args;
     console.log(
-      `Withdrawal funded: ${depositor}$ deposited ${amount} for ${withdrawer}`
+      `Withdrawal initiated from ${from}$ of amount: ${amount}`
     );
-    updateWithdrawerAmount(withdrawer, amount);
+
+    // TODO: get txHash
+    updateWithdrawals(from, txHash);
   }
 
   return {
