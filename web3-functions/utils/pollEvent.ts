@@ -39,15 +39,13 @@ export async function pollEvent(
             logs.push(...result);
             lastBlock = toBlock;
         } catch (err) {
-            return {
-                canExec: false,
-                message: `Rpc call failed: ${(err as Error).message}`,
-            };
+            console.log(`Encountered error parsing logs`);
+            return [];
         }
     }
 
     // Update storage for next run
     await storage.set("lastBlockNumber", lastBlock.toString());
 
-    return 1;
+    return logs;
 }

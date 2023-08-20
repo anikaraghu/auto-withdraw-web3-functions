@@ -7,9 +7,9 @@ import { initDb } from "../utils/db.js";
 import { pollEvent } from "../utils/pollEvent";
 import { Contract } from "@ethersproject/contracts";
 
-const MAX_RANGE = 100; // limit range of events to comply with rpc providers
-const MAX_REQUESTS = 100; // limit number of requests on every execution to avoid hitting timeout
-const WITHDRAWAL_ABI = ["event ETHBridgeInitiated(address indexed from, address indexed to, uint256 amount, bytes extraData);"];
+const WITHDRAWAL_ABI = [
+  "event ETHBridgeInitiated(address indexed from, address indexed to, uint256 amount, bytes extraData);"
+];
 
 Web3Function.onRun(async (context: Web3FunctionContext) => {
   const { secrets, multiChainProvider } = context;
@@ -33,32 +33,13 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
   if (logs.length == 0) {
     return {
       canExec: false,
-      message: `No new withdrawals. Updated block number: ${lastBlock.toString()}`
+      message: `No new withdrawals initiated.`
     };
   }
 
   const db = await initDb(PRIVATE_KEY, PUBLIC_KEY);
   const collFunders = db.collection("WithdrawalFunders");
   const collWithdrawals = db.collection("Withdrawal");
-
-  async function updateWithdrawals(
-    txHash: string,
-    withdrawer: string,
-    nonce: string,
-    target: string,
-    value: string,
-    gasLimit: string,
-    data: string,
-    createdAt: number
-  ) {
-    const withdrawerFunded = await collFunders.record(withdrawer).get();
-    // Only pay attention to this withdrawal if it's been prefunded
-    if (withdrawerFunded.exists()) {
-      await collWithdrawals.create(
-        [txHash, withdrawer, nonce, target, value, gasLimit, data, createdAt]
-      );
-    }
-  }
 
   // Parse retrieved events
   console.log(`Matched ${logs.length} new events`);
@@ -82,13 +63,13 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
         amount,
         txDetails.gasLimit,
         extraData,
-        txDetails.timestamp // timestamp
+        txDetails.timestamp
       ]);
     }
   }
 
   return {
     canExec: false,
-    message: `Updated block number: ${lastBlock.toString()}`
+    message: `Updated withdrawals`
   };
 });
