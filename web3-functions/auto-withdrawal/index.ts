@@ -6,20 +6,14 @@ import {
 import { Contract } from "@ethersproject/contracts";
 import { initDb } from "../utils/db.js";
 import { BigNumber } from "ethers";
+import { pollEvent } from "../utils/pollEvent";
 
-const MAX_RANGE = 100; // limit range of events to comply with rpc providers
-const MAX_REQUESTS = 1; // limit number of requests on every execution to avoid hitting timeout
 const AUTO_WITHDRAWER_ABI = [
   "event WithdrawalFunded(address indexed _depositor, address indexed _withdrawer, uint256 _amount)",
 ];
 
-interface record {
-  withdrawer: string;
-  amount: BigNumber;
-}
-
 Web3Function.onRun(async (context: Web3FunctionContext) => {
-  const { userArgs, secrets, storage, multiChainProvider } = context;
+  const { secrets, storage, multiChainProvider } = context;
 
   // User Secrets
   const PRIVATE_KEY = (await secrets.get("PRIVATE_KEY_POLYBASE")) as string;
@@ -27,53 +21,20 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
 
   const provider = multiChainProvider.default();
 
-  // Create oracle & counter contract
-  const autoWithdrawer = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
-  const oracle = new Contract(autoWithdrawer, AUTO_WITHDRAWER_ABI, provider);
-  const topics = [oracle.interface.getEventTopic("WithdrawalFunded")];
-  const currentBlock = await provider.getBlockNumber();
-
-  // Retrieve last processed block number & nb events matched from storage
-  const lastBlockStr = await storage.get("lastBlockNumber");
-  let lastBlock = lastBlockStr ? parseInt(lastBlockStr) : currentBlock - 2000;
-  let totalEvents = parseInt((await storage.get("totalEvents")) ?? "0");
-  console.log(`Last processed block: ${lastBlock}`); 
-  console.log(`Current block: ${currentBlock}`);
-  console.log(`Total events matched: ${totalEvents}`);
+  const autoWithdrawerAddress = "0x33F61D76986522e538F3829674F0FB6cE4e2eF23";
+  const autoWithdrawer = new Contract(autoWithdrawerAddress, AUTO_WITHDRAWER_ABI, provider);
 
   // Fetch recent logs in range of 100 blocks
-  const logs: Log[] = [];
-  let nbRequests = 0;
-  
-  while (lastBlock < currentBlock && nbRequests < MAX_REQUESTS) {
-    nbRequests++;
-    const fromBlock = lastBlock + 1;
-    const toBlock = Math.min(fromBlock + MAX_RANGE, currentBlock);
-    console.log(`Fetching log events from blocks ${fromBlock} to ${toBlock}`);
-    try {
-      const eventFilter = {
-        address: oracleAddress,
-        topics,
-        fromBlock,
-        toBlock,
-      };
-      const result = await provider.getLogs(eventFilter);
-      logs.push(...result);
-      lastBlock = toBlock;
-    } catch (err) {
-      return {
-        canExec: false,
-        message: `Rpc call failed: ${(err as Error).message}`,
-      };
-    }
-  }
-  // Update storage for next run
-  await storage.set("lastBlockNumber", lastBlock.toString());
+  const logs: Log[] = await pollEvent(
+    context,
+    autoWithdrawer,
+    "WithdrawalFunded"
+  );
 
   if (logs.length == 0) {
     return {
       canExec: false,
-      message: "No new withdrawal fundings",
+      message: `No new withdrawal fundings.`
     };
   }
 
@@ -94,7 +55,7 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
   // Parse retrieved events
   console.log(`Matched ${logs.length} new events`);
   for (const log of logs) {
-    const event = oracle.interface.parseLog(log);
+    const event = autoWithdrawer.interface.parseLog(log);
     const [depositor, withdrawer, amount] = event.args;
     console.log(
       `Withdrawal funded: ${depositor}$ deposited ${amount} for ${withdrawer}`
@@ -104,6 +65,6 @@ Web3Function.onRun(async (context: Web3FunctionContext) => {
 
   return {
     canExec: false,
-    message: `Updated block number: ${lastBlock.toString()}`
+    message: `Updated withdrawal fundings`
   };
 });
